@@ -13,18 +13,17 @@ static const int16_t ACTUAL_CENTER_X = SCREEN_W / 2;
 static const int16_t ACTUAL_CENTER_Y = SCREEN_H / 2;
 
 // --- Parâmetros da Barra de RPM em Arco (Topo, Esquerda para Direita) ---
-static const int16_t ARC_RPM_CENTER_X = ACTUAL_CENTER_X;
-static const int16_t ARC_RPM_CENTER_Y = 120;     // Posição Y do centro do arco (mais para cima)
-static const int16_t ARC_RPM_OUTER_RADIUS = 120; // Raio externo
-static const int16_t ARC_RPM_THICKNESS = 20;     // Espessura
+static const int16_t ARC_RPM_CENTER_X = ACTUAL_CENTER_X; // Centro horizontal da tela
+static const int16_t ARC_RPM_CENTER_Y = 120;             // Centro Y na base da tela para o arco ficar no topo
+static const int16_t ARC_RPM_OUTER_RADIUS = 120;         // Raio externo
+static const int16_t ARC_RPM_THICKNESS = 20;             // Espessura
 static const int16_t ARC_RPM_INNER_RADIUS = ARC_RPM_OUTER_RADIUS - ARC_RPM_THICKNESS;
 
 // Ângulos para o arco (0=direita, 90=baixo, 180=esquerda, 270=topo)
-// Para um arco no topo, crescendo da esquerda para a direita:
-static const int16_t ARC_RPM_TOTAL_START_ANGLE = 270; // Começa na esquerda
-static const int16_t ARC_RPM_TOTAL_END_ANGLE = 90;    // Termina na direita (passando por 270)
-                                                      // Ou 360, dependendo da biblioteca. TFT_eSPI geralmente trata 0 e 360 de forma similar.
-                                                      // O arco completo irá de 180 (esquerda) a 0 (direita).
+// O arco irá no topo, crescendo da esquerda (180°) para a direita (360°/0°).
+// Usamos 360 para criar um intervalo contínuo e crescente para a função map().
+static const int16_t ARC_RPM_TOTAL_START_ANGLE = 90; // 0 RPM está na esquerda
+static const int16_t ARC_RPM_TOTAL_END_ANGLE = 270;  // vRpmMax está na direita
 
 // --- Novas Posições Y dos Elementos ---
 // Texto de RPM
@@ -129,39 +128,39 @@ void drawArcRpmBar(int rpm_val, int prevRpmVal)
     bool currently_at_max = (rpm_val >= local_vRpmMax);
     bool previously_at_max = (prevRpmVal >= local_vRpmMax && prevRpmVal != -1);
 
-    // Otimização: se nada mudou e não houve transição de/para max, não redesenha
     if (rpm_val == prevRpmVal && !backgroundChangedThisFrame && (currently_at_max == previously_at_max))
     {
         return;
     }
 
     // Mapeia RPM para o ângulo final do arco.
-    // ARC_RPM_TOTAL_START_ANGLE (180) é 0 RPM. ARC_RPM_TOTAL_END_ANGLE (0) é vRpmMax.
-    // Ângulos diminuem com aumento de RPM (180 -> 0).
+    // Ângulos AUMENTAM com aumento de RPM (180 -> 360).
     int current_rpm_end_angle_deg = map(rpm_val, 0, local_vRpmMax, ARC_RPM_TOTAL_START_ANGLE, ARC_RPM_TOTAL_END_ANGLE);
-    current_rpm_end_angle_deg = constrain(current_rpm_end_angle_deg, ARC_RPM_TOTAL_END_ANGLE, ARC_RPM_TOTAL_START_ANGLE);
+    current_rpm_end_angle_deg = constrain(current_rpm_end_angle_deg, ARC_RPM_TOTAL_START_ANGLE, ARC_RPM_TOTAL_END_ANGLE);
 
-    // Limpa a área do arco e desenha o fundo cinza se necessário
     if (backgroundChangedThisFrame || (previously_at_max && !currently_at_max) || prevRpmVal == -1)
     {
+        // Desenha a barra de fundo cinza inteira
         tft.drawSmoothArc(ARC_RPM_CENTER_X, ARC_RPM_CENTER_Y, ARC_RPM_OUTER_RADIUS, ARC_RPM_INNER_RADIUS,
-                          ARC_RPM_TOTAL_END_ANGLE, ARC_RPM_TOTAL_START_ANGLE, // Do fim para o começo para cobrir tudo
-                          RPM_BAR_INACTIVE_COLOR, currentBgColor, false);     // false para não desenhar borda
+                          ARC_RPM_TOTAL_START_ANGLE, ARC_RPM_TOTAL_END_ANGLE,
+                          RPM_BAR_INACTIVE_COLOR, currentBgColor, false);
     }
     else
     {
-        // Limpa apenas a diferença se o RPM diminuiu
         int prev_rpm_end_angle_deg = map(prevRpmVal, 0, local_vRpmMax, ARC_RPM_TOTAL_START_ANGLE, ARC_RPM_TOTAL_END_ANGLE);
-        prev_rpm_end_angle_deg = constrain(prev_rpm_end_angle_deg, ARC_RPM_TOTAL_END_ANGLE, ARC_RPM_TOTAL_START_ANGLE);
-        if (current_rpm_end_angle_deg > prev_rpm_end_angle_deg)
-        { // RPM diminuiu
+        prev_rpm_end_angle_deg = constrain(prev_rpm_end_angle_deg, ARC_RPM_TOTAL_START_ANGLE, ARC_RPM_TOTAL_END_ANGLE);
+
+        // Se RPM diminuiu, o ângulo final é menor.
+        if (current_rpm_end_angle_deg < prev_rpm_end_angle_deg)
+        {
+            // Limpa do NOVO fim até o FIM TOTAL da barra
             tft.drawSmoothArc(ARC_RPM_CENTER_X, ARC_RPM_CENTER_Y, ARC_RPM_OUTER_RADIUS, ARC_RPM_INNER_RADIUS,
-                              prev_rpm_end_angle_deg, current_rpm_end_angle_deg,
+                              current_rpm_end_angle_deg, ARC_RPM_TOTAL_END_ANGLE,
                               RPM_BAR_INACTIVE_COLOR, currentBgColor, false);
         }
     }
 
-    // Determina a cor baseada no RPM atual (sem gradiente)
+    // Determina a cor baseada no RPM atual
     uint16_t active_color;
     if (rpm_val >= local_vRpmRedStart || currently_at_max)
     {
@@ -176,24 +175,21 @@ void drawArcRpmBar(int rpm_val, int prevRpmVal)
         active_color = COLOR_RPM_GREEN;
     }
 
-    // Se RPM é 0, não desenha parte ativa
     if (rpm_val <= 0)
     {
-        // Garante que se havia algo desenhado e agora é 0, a área seja limpa para cinza
         if (prevRpmVal > 0 && !backgroundChangedThisFrame)
         {
             tft.drawSmoothArc(ARC_RPM_CENTER_X, ARC_RPM_CENTER_Y, ARC_RPM_OUTER_RADIUS, ARC_RPM_INNER_RADIUS,
-                              ARC_RPM_TOTAL_END_ANGLE, ARC_RPM_TOTAL_START_ANGLE,
+                              ARC_RPM_TOTAL_START_ANGLE, ARC_RPM_TOTAL_END_ANGLE,
                               RPM_BAR_INACTIVE_COLOR, currentBgColor, false);
         }
         return;
     }
 
-    // Desenha o arco ativo com a cor determinada
-    // O arco vai de ARC_RPM_TOTAL_START_ANGLE (180) até current_rpm_end_angle_deg
+    // Desenha o arco ativo
     tft.drawSmoothArc(ARC_RPM_CENTER_X, ARC_RPM_CENTER_Y, ARC_RPM_OUTER_RADIUS, ARC_RPM_INNER_RADIUS,
-                      current_rpm_end_angle_deg, ARC_RPM_TOTAL_START_ANGLE,
-                      active_color, currentBgColor, false); // false para não desenhar borda
+                      ARC_RPM_TOTAL_START_ANGLE, current_rpm_end_angle_deg,
+                      active_color, currentBgColor, false);
 }
 
 void drawRpmTextDisplay(int rpm_val, int prevRpmVal)
